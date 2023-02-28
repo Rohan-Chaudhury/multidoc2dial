@@ -1,7 +1,7 @@
 #!/bin/sh
 
-seg=$1 # token or structure
-task=$2 # grounding or generation
+seg=structure # token or structure
+task=generation # grounding or generation
 YOUR_DIR=../data # change it to your own local dir
 
 

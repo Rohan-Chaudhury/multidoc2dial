@@ -16,6 +16,10 @@ import torch.distributed as dist
 from pytorch_lightning.accelerators.ddp_accelerator import DDPAccelerator
 from pytorch_lightning.cluster_environments import TorchElasticEnvironment
 from torch.utils.data import DataLoader
+import sys
+sys.path.append("/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/md2d")
+from rag_splade import *
+
 
 from transformers import (
     AutoConfig,

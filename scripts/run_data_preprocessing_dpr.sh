@@ -1,7 +1,7 @@
 #!/bin/sh
 
-seg=$1 # token or structure
-domain=$2 # dmv va ssa or studentaid
+seg=structure # token or structure
+task=generation # grounding or generation
 YOUR_DIR=../data # change it to your own local dir
 
 python data_preprocessor.py \

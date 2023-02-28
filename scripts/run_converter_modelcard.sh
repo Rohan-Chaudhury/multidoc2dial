@@ -1,7 +1,7 @@
 #!/bin/sh
 
-domain=$1
-seg=$2
+domain=all
+seg=structure
 config=dpr-$domain-$seg
 
 # config "model_path" for question encoder to your local path to DPR encoder;

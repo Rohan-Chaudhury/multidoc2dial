@@ -1,14 +1,16 @@
 #!/bin/sh
 
-domain=$1 # "all" or "dmv", "ssa", "studentaid", "va" for domain adaptation setup
-seg=$2 # token or structure
+domain=all # "all" or "dmv", "ssa", "studentaid", "va" for domain adaptation setup
+seg=structure # token or structure
 
-dpr=dpr-$domain-$seg
+# dpr=dpr-$domain-$seg
+dpr=distilsplade
 rag_model_name=$CHECKPOINTS/rag-$dpr
 # config "ctx_model_name" for ctx encoder to your local path to DPR encoder;
 # ctx_model_name=$CHECKPOINTS/$dpr/ctx_encoder
 # or use our fine-tuned DPR encoders, such as "sivasankalpp/dpr-multidoc2dial-token-ctx-encoder" or "sivasankalpp/dpr-multidoc2dial-structure-ctx-encoder"
-ctx_model_name=sivasankalpp/dpr-multidoc2dial-$seg-ctx-encoder
+# ctx_model_name=sivasankalpp/dpr-multidoc2dial-$seg-ctx-encoder
+ctx_model_name=$CHECKPOINTS/distilsplade-max/context_encoder
 KB_FOLDER=../data/mdd_kb/
 
 python rag/use_own_knowledge_dataset.py \

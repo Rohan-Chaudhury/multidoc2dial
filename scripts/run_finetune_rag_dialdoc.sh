@@ -2,16 +2,19 @@
 
 export PYTHONPATH="../":"${PYTHONPATH}"
 export TOKENIZERS_PARALLELISM=false
-domain=$1 # all dmv ssa va studentaid
-seg=$2 # token structure
-score=$3 # original reranking reranking_original
-task=$4 # grounding generation
+domain=all # all dmv ssa va studentaid
+seg=structure # token structure
+score=original # original reranking reranking_original
+task=generation # grounding generation
 seed=$RANDOM 
 
-dpr=dpr-$domain-$seg
+
+# dpr=dpr-$domain-$seg
+dpr=distilsplade
 MODEL_NAME_OR_PATH=$CHECKPOINTS/rag-$dpr
 KB_FOLDER=../data/mdd_kb/knowledge_dataset-$dpr
 DATA_DIR=../data/mdd_$domain/dd-$task-$seg
+
 
 python rag/finetune_rag_dialdoc.py \
     --seed $seed \
@@ -35,11 +38,11 @@ python rag/finetune_rag_dialdoc.py \
     --n_docs 5 \
     --train_batch_size 8 \
     --eval_batch_size 2 \
-    --max_combined_length 300 \
-    --max_source_length 128 \
-    --max_target_length 50 \
-    --val_max_target_length 50 \
-    --test_max_target_length 50 \
+    --max_combined_length 100 \
+    --max_source_length 64 \
+    --max_target_length 25 \
+    --val_max_target_length 25 \
+    --test_max_target_length 25 \
     --label_smoothing 0.1 \
     --dropout 0.1 \
     --attention_dropout 0.1 \
