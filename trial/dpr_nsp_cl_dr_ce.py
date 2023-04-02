@@ -26,20 +26,19 @@ from transformers import AutoModel
 
 config = {
     "epochs": 10,
-    "batch_size": 4,
+    "batch_size": 6,
     "learning_rates": {
         "question_encoder": 3e-5,
         "context_encoder": 3e-5,
         "cross_encoder": 1e-5
     },
-    "gradient_accumulation_steps": 64,
+    "gradient_accumulation_steps": 128,
     "max_length": 512,
     "patience": 3,
     "temperature": 1.0,
 }
 
-def compute_scores(self, question_embeddings, context_embeddings):
-    return torch.matmul(question_embeddings, context_embeddings.t())
+
 
 
 class T5CrossEncoder(nn.Module):
@@ -72,6 +71,9 @@ class CustomDPRQuestionEncoderWithDropout(nn.Module):
         return  self.linear(self.dropout(self.layer_norm(pooled_output)))
         # return self.linear(pooled_output)
         # return outputs.pooler_output
+
+def compute_scores(question_embeddings, context_embeddings):
+    return torch.matmul(question_embeddings, context_embeddings.t())
 
 class CustomDPRContextEncoder(nn.Module):
     def __init__(self, model_name, dropout_rate):
@@ -440,8 +442,8 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
 
             # Compute contrastive loss
             loss = contrastive_loss(anchor_embeddings, positive_embeddings, negative_embeddings)
-            positive_scores = model.question_encoder.compute_scores(anchor_embeddings, positive_embeddings)
-            negative_scores = model.question_encoder.compute_scores(anchor_embeddings, negative_embeddings)
+            positive_scores = compute_scores(anchor_embeddings, positive_embeddings)
+            negative_scores = compute_scores(anchor_embeddings, negative_embeddings)
             margin = 1.0
             dr_loss = torch.clamp(margin - positive_scores + negative_scores, min=0).mean()
             # Prepare cross-encoder inputs
@@ -521,8 +523,8 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
                 anchor_embeddings = model.question_encoder(anchor_input_ids, anchor_attention_mask)
                 positive_embeddings = model.context_encoder(positive_input_ids, positive_attention_mask)
                 negative_embeddings = model.context_encoder(negative_input_ids, negative_attention_mask)
-                positive_scores = model.question_encoder.compute_scores(anchor_embeddings, positive_embeddings)
-                negative_scores = model.question_encoder.compute_scores(anchor_embeddings, negative_embeddings)
+                positive_scores = compute_scores(anchor_embeddings, positive_embeddings)
+                negative_scores = compute_scores(anchor_embeddings, negative_embeddings)
                 
                 margin = 1.0
                 dr_loss = torch.clamp(margin - positive_scores + negative_scores, min=0).mean()
@@ -547,6 +549,7 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
             # Combine the losses
             combined_loss = contrastive_weight * loss + cross_encoder_weight * cross_encoder_loss + dr_weight * dr_loss
 
+
             total_val_loss += combined_loss.item()
             val_iter.set_description(f"Validation (loss = {loss.item():.4f})")
             val_iter.refresh()
@@ -560,7 +563,7 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
             best_cross_encoder_state_dict = copy.deepcopy(cross_encoder.state_dict())
             # Get the current date and time as a string
             timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-            directory_to_save="/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/trial/output/contrastive_function/"+timestamp
+            directory_to_save="/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/trial/output/contrastive_discriminative/"+timestamp
             # Create a new directory with the timestamp
             os.makedirs(directory_to_save, exist_ok=True)
 
