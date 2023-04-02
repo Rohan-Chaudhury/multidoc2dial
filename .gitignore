@@ -19,3 +19,8 @@ trial/hsln/datasets/*
 trial/hsln/results/*
 trial/*.pkl
 trial/*.npy
+trial/2023-03-30_16-38-52/
+trial/output/
+trial/dpr_output/
+trial/multidoc2dial.zip
+trial/multidoc2dial/
