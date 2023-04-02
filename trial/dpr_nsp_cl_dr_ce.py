@@ -38,6 +38,9 @@ config = {
     "temperature": 1.0,
 }
 
+def compute_scores(self, question_embeddings, context_embeddings):
+    return torch.matmul(question_embeddings, context_embeddings.t())
+
 
 class T5CrossEncoder(nn.Module):
     def __init__(self, pretrained_model_name):
@@ -96,7 +99,7 @@ context_tokenizer = DPRContextEncoderTokenizer.from_pretrained("facebook/dpr-ctx
 # reader_tokenizer = DPRReaderTokenizer.from_pretrained("facebook/dpr-reader-single-nq-base")
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Set this to the index of the GPU you want to use
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"  # Set this to the index of the GPU you want to use
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
@@ -402,6 +405,19 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
     best_val_loss = float('inf')
     best_model = None
 
+    # Initialize loss weights
+    contrastive_weight = 1 / 3
+    cross_encoder_weight = 1 / 3
+    dr_weight = 1 / 3
+
+    # Initialize running averages for losses
+    running_contrastive_loss = 0.0
+    running_cross_encoder_loss = 0.0
+    running_dr_loss = 0.0
+
+    # Define the smoothing factor for updating the running averages
+    smoothing_factor = 0.1
+
     for epoch in range(epochs):
         print(f"Epoch {epoch + 1}/{epochs}")
         model.train()
@@ -424,7 +440,10 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
 
             # Compute contrastive loss
             loss = contrastive_loss(anchor_embeddings, positive_embeddings, negative_embeddings)
-
+            positive_scores = model.question_encoder.compute_scores(anchor_embeddings, positive_embeddings)
+            negative_scores = model.question_encoder.compute_scores(anchor_embeddings, negative_embeddings)
+            margin = 1.0
+            dr_loss = torch.clamp(margin - positive_scores + negative_scores, min=0).mean()
             # Prepare cross-encoder inputs
             positive_t5_input = [f"{q} </s> {c}" for q, c in zip(questions, positive_contexts)]
             negative_t5_input = [f"{q} </s> {c}" for q, c in zip(questions, negative_contexts)]
@@ -438,10 +457,26 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
             cross_encoder_loss = F.binary_cross_entropy_with_logits(cross_encoder_logits, cross_encoder_labels)
 
 
+            # Update running averages for losses
+            running_contrastive_loss = (1 - smoothing_factor) * running_contrastive_loss + smoothing_factor * loss.item()
+            running_cross_encoder_loss = (1 - smoothing_factor) * running_cross_encoder_loss + smoothing_factor * cross_encoder_loss.item()
+            running_dr_loss = (1 - smoothing_factor) * running_dr_loss + smoothing_factor * dr_loss.item()
+
+            # Update weights based on the running averages of losses
+            total_running_loss = running_contrastive_loss + running_cross_encoder_loss + running_dr_loss
+            contrastive_weight = running_contrastive_loss / total_running_loss
+            cross_encoder_weight = running_cross_encoder_loss / total_running_loss
+            dr_weight = running_dr_loss / total_running_loss
+
+            # Compute the combined loss using updated weights
+            combined_loss = contrastive_weight * loss + cross_encoder_weight * cross_encoder_loss + dr_weight * dr_loss
+            total_loss += combined_loss.item()
+
+
 
         # Combine the losses
-            combined_loss = (1 - alpha) * loss + alpha * cross_encoder_loss
-            total_loss += combined_loss.item()
+            # combined_loss = (1 - alpha) * loss + alpha * cross_encoder_loss + dr_loss
+            # total_loss += combined_loss.item()
 
             # total_loss += loss.item()
 
@@ -486,6 +521,11 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
                 anchor_embeddings = model.question_encoder(anchor_input_ids, anchor_attention_mask)
                 positive_embeddings = model.context_encoder(positive_input_ids, positive_attention_mask)
                 negative_embeddings = model.context_encoder(negative_input_ids, negative_attention_mask)
+                positive_scores = model.question_encoder.compute_scores(anchor_embeddings, positive_embeddings)
+                negative_scores = model.question_encoder.compute_scores(anchor_embeddings, negative_embeddings)
+                
+                margin = 1.0
+                dr_loss = torch.clamp(margin - positive_scores + negative_scores, min=0).mean()
 
                 # Compute contrastive loss
                 loss = contrastive_loss(anchor_embeddings, positive_embeddings, negative_embeddings)
@@ -505,7 +545,8 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
 
 
             # Combine the losses
-            combined_loss = (1 - alpha) * loss + alpha * cross_encoder_loss
+            combined_loss = contrastive_weight * loss + cross_encoder_weight * cross_encoder_loss + dr_weight * dr_loss
+
             total_val_loss += combined_loss.item()
             val_iter.set_description(f"Validation (loss = {loss.item():.4f})")
             val_iter.refresh()
