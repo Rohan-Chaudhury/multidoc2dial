@@ -22,19 +22,19 @@ from transformers import EarlyStoppingCallback
 from tqdm.auto import tqdm
 from transformers import T5EncoderModel
 from transformers import AutoModel
-
+from transformers import T5Config
 
 config = {
-    "epochs": 10,
-    "batch_size": 4,
+    "epochs": 40,
+    "batch_size": 6,
     "learning_rates": {
         "question_encoder": 3e-5,
         "context_encoder": 3e-5,
         "cross_encoder": 1e-5
     },
-    "gradient_accumulation_steps": 128,
+    "gradient_accumulation_steps": 4096,
     "max_length": 512,
-    "patience": 3,
+    "patience": 5,
     "temperature": 1.0,
 }
 
@@ -42,15 +42,19 @@ config = {
 
 
 class T5CrossEncoder(nn.Module):
-    def __init__(self, pretrained_model_name):
+    def __init__(self, pretrained_model_name, model_max_length, dropout_rate = 0.1):
         super().__init__()
-        self.t5 = T5EncoderModel.from_pretrained(pretrained_model_name)
+        config = T5Config.from_pretrained(pretrained_model_name)
+        config.model_max_length = model_max_length
+        self.t5 = T5EncoderModel.from_pretrained(pretrained_model_name, config=config)
+        self.dropout = nn.Dropout(dropout_rate)
         self.classifier = nn.Linear(self.t5.config.d_model, 1)
 
     def forward(self, input_ids, attention_mask):
         outputs = self.t5(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
         last_hidden_state = outputs.last_hidden_state
         pooled_output = last_hidden_state[:, 0]
+        pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
         return logits
 
@@ -60,7 +64,7 @@ class T5CrossEncoder(nn.Module):
 class CustomDPRQuestionEncoderWithDropout(nn.Module):
     def __init__(self, model_name, dropout_rate):
         super(CustomDPRQuestionEncoderWithDropout, self).__init__()
-        self.model = AutoModel.from_pretrained(model_name)
+        self.model = DPRQuestionEncoder.from_pretrained(model_name)
         self.dropout = nn.Dropout(dropout_rate)
         self.layer_norm = nn.LayerNorm(self.model.config.hidden_size)
         self.linear = nn.Linear(self.model.config.hidden_size, self.model.config.hidden_size)
@@ -78,7 +82,7 @@ def compute_scores(question_embeddings, context_embeddings):
 class CustomDPRContextEncoder(nn.Module):
     def __init__(self, model_name, dropout_rate):
         super(CustomDPRContextEncoder, self).__init__()
-        self.model = AutoModel.from_pretrained(model_name)
+        self.model = DPRContextEncoder.from_pretrained(model_name)
         self.dropout = nn.Dropout(dropout_rate)
         self.layer_norm = nn.LayerNorm(self.model.config.hidden_size)
         self.linear = nn.Linear(self.model.config.hidden_size, self.model.config.hidden_size)
@@ -91,17 +95,18 @@ class CustomDPRContextEncoder(nn.Module):
         # return outputs.pooler_output
 
 # config = DPRConfig.from_pretrained("facebook/dpr-question_encoder-single-nq-base")
-question_encoder = CustomDPRQuestionEncoderWithDropout("facebook/dpr-question_encoder-single-nq-base", 0.1)
-question_tokenizer = DPRQuestionEncoderTokenizer.from_pretrained("facebook/dpr-question_encoder-single-nq-base")
+question_encoder = CustomDPRQuestionEncoderWithDropout("sivasankalpp/dpr-multidoc2dial-structure-question-encoder", 0.1)
+question_tokenizer = DPRQuestionEncoderTokenizer.from_pretrained("sivasankalpp/dpr-multidoc2dial-structure-question-encoder")
 
-context_encoder = CustomDPRContextEncoder(model_name="facebook/dpr-ctx_encoder-single-nq-base", dropout_rate=0.1)
-context_tokenizer = DPRContextEncoderTokenizer.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base")
+context_encoder = CustomDPRContextEncoder(model_name="sivasankalpp/dpr-multidoc2dial-structure-ctx-encoder", dropout_rate=0.1)
+context_tokenizer = DPRContextEncoderTokenizer.from_pretrained("sivasankalpp/dpr-multidoc2dial-structure-ctx-encoder")
+
 
 # reader = DPRReader.from_pretrained("facebook/dpr-reader-single-nq-base")
 # reader_tokenizer = DPRReaderTokenizer.from_pretrained("facebook/dpr-reader-single-nq-base")
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"  # Set this to the index of the GPU you want to use
+os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"  # Set this to the index of the GPU you want to use
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
@@ -113,11 +118,13 @@ question_encoder = nn.DataParallel(question_encoder)
 context_encoder = nn.DataParallel(context_encoder)
 question_encoder.to(device)
 context_encoder.to(device)
-t5_pretrained_model_name = "t5-base"
-t5_cross_encoder = T5CrossEncoder(t5_pretrained_model_name)
+t5_pretrained_model_name = "t5-large"
+model_max_length = 512
+t5_cross_encoder = T5CrossEncoder(t5_pretrained_model_name, model_max_length)
+# t5_cross_encoder = T5CrossEncoder(t5_pretrained_model_name)
 t5_cross_encoder= nn.DataParallel(t5_cross_encoder)
 t5_cross_encoder.to(device)
-t5_tokenizer = T5Tokenizer.from_pretrained(t5_pretrained_model_name)
+t5_tokenizer = T5Tokenizer.from_pretrained(t5_pretrained_model_name, model_max_length=model_max_length)
 
 with open("/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/data/mdd_dpr/dpr.multidoc2dial_all.structure.train.json", "r") as f:
     training_data = json.load(f)
@@ -140,15 +147,7 @@ def remove_extra_spaces(text):
     return re.sub(r'\s+', ' ', text).strip()
 
 def preprocess_question(question):
-    turns = question.split("[SEP]")
-    questions=turns[0]
-    turns=[turns[1]]
-    turns = [turn.strip() for turn in turns if turn.strip()]
-    turns = [turn.split("||") for turn in turns]
-    turns = [turn[::-1] for turn in turns]  # Reverse the order of previous turns
-    turns = [" || ".join(turn) for turn in turns]
-
-    return "Query: "+ questions.lower()+ " || Context: "+  " ".join(turns).lower() 
+    return remove_extra_spaces(question)
 
 
 
@@ -169,17 +168,18 @@ def preprocess_data(training_data, negative_weight=1, hard_negative_weight=2):
         hard_negative_ctxs = item["hard_negative_ctxs"]
 
         for positive_ctx in positive_ctxs:
-            positive_context = remove_extra_spaces(positive_ctx["title"].lower() + " " + positive_ctx["text"].lower())
+            positive_context = remove_extra_spaces(positive_ctx["text"])
 
             # Combine negative_ctxs and hard_negative_ctxs for sampling
             all_negative_ctxs = (negative_ctxs * negative_weight) + (hard_negative_ctxs * hard_negative_weight)
 
             for negative_ctx in all_negative_ctxs:
-                negative_context = remove_extra_spaces(negative_ctx["title"].lower() + " " + negative_ctx["text"].lower())
+                negative_context = remove_extra_spaces(negative_ctx["text"])
 
                 train_data["question"].append(question)
                 train_data["positive_context"].append(positive_context)
                 train_data["negative_context"].append(negative_context)
+                
 
     return train_data
 
@@ -190,8 +190,8 @@ def preprocess_corpus_data(corpus_data):
     }
 
     for item in corpus_data:
-        title = remove_extra_spaces(item["title"].lower())
-        text = remove_extra_spaces(item["text"].lower())
+        title = remove_extra_spaces(item["title"])
+        text = remove_extra_spaces(item["text"])
         corpus_data_preprocessed["title"].append(title)
         corpus_data_preprocessed["text"].append(text)
     
@@ -308,7 +308,7 @@ def contrastive_loss(anchor_embeddings, positive_embeddings, negative_embeddings
     return F.relu(pos_distances - neg_distances + margin).mean()
 
 class DPRCombinedModel(nn.Module):
-    def __init__(self, question_encoder: DPRQuestionEncoder, context_encoder: DPRContextEncoder):
+    def __init__(self, question_encoder: CustomDPRQuestionEncoderWithDropout, context_encoder: CustomDPRContextEncoder):
         super(DPRCombinedModel, self).__init__()
         self.question_encoder = question_encoder
         self.context_encoder = context_encoder
@@ -451,7 +451,7 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
             negative_t5_input = [f"{q} </s> {c}" for q, c in zip(questions, negative_contexts)]
             t5_input = positive_t5_input + negative_t5_input
 
-            t5_encodings = t5_tokenizer(t5_input, return_tensors="pt", padding=True, truncation=True, max_length=max_length)
+            t5_encodings = t5_tokenizer(t5_input, return_tensors="pt", padding='max_length', truncation=True, max_length=max_length)
             t5_input_ids, t5_attention_mask = t5_encodings["input_ids"].to(device), t5_encodings["attention_mask"].to(device)
 
             cross_encoder_logits = cross_encoder(t5_input_ids, t5_attention_mask).squeeze()
@@ -537,7 +537,7 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
             negative_t5_input = [f"{q} </s> {c}" for q, c in zip(questions, negative_contexts)]
             t5_input = positive_t5_input + negative_t5_input
 
-            t5_encodings = t5_tokenizer(t5_input, return_tensors="pt", padding=True, truncation=True, max_length=max_length)
+            t5_encodings = t5_tokenizer(t5_input, return_tensors="pt", padding='max_length', truncation=True, max_length=max_length)
             t5_input_ids, t5_attention_mask = t5_encodings["input_ids"].to(device), t5_encodings["attention_mask"].to(device)
 
             with torch.no_grad():
@@ -563,7 +563,7 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
             best_cross_encoder_state_dict = copy.deepcopy(cross_encoder.state_dict())
             # Get the current date and time as a string
             timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-            directory_to_save="/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/trial/output/contrastive_discriminative/"+timestamp
+            directory_to_save="/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/trial/output/contrastive_discriminative_pre_trained/"+timestamp
             # Create a new directory with the timestamp
             os.makedirs(directory_to_save, exist_ok=True)
 

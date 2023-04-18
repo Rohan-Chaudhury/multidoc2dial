@@ -10,7 +10,15 @@ from models import Splade, BEIRSpladeModel, BEIRDPR, t5Embedder
 from beir.retrieval.custom_metrics import mrr
 from transformers import AutoTokenizer, DPRQuestionEncoder, DPRContextEncoder, T5Tokenizer, BertModel, AutoModel
 
-
+from transformers import DPRConfig, DPRContextEncoder, DPRContextEncoderTokenizer
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Set this to the index of the GPU you want to use
+import torch
+import torch.nn as nn
+from torch.optim import AdamW
+from tqdm import tqdm
+import random
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 import argparse
 
 import pdb
@@ -18,7 +26,16 @@ import pdb
 BERT_MODEL = "mrm8488/t5-base-finetuned-break_data-question-retrieval"
 # BERT_VOCAB = "bert_model/scibert_scivocab_uncased/vocab.txt"
 #BERT_MODEL = "allenai/scibert_scivocab_uncased"
+class DPRCombinedModel(nn.Module):
+    def __init__(self, question_encoder: DPRQuestionEncoder, context_encoder: DPRContextEncoder):
+        super(DPRCombinedModel, self).__init__()
+        self.question_encoder = question_encoder
+        self.context_encoder = context_encoder
 
+    def forward(self, question_input_ids, question_attention_mask, context_input_ids, context_attention_mask):
+        question_outputs = self.question_encoder(input_ids=question_input_ids, attention_mask=question_attention_mask)
+        context_outputs = self.context_encoder(input_ids=context_input_ids, attention_mask=context_attention_mask)
+        return question_outputs, context_outputs
 
 config = {
     "bert_model": BERT_MODEL,
@@ -142,6 +159,34 @@ if "dpr-ft" in model_name:
     beir_model = BEIRDPR(query_encoder, doc_encoder,
                          query_tokenizer, doc_tokenizer)
     model = DRES(beir_model, batch_size=128)
+
+if "dpr-ft-now" in model_name:
+    checkpoint_path = "/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/trial/output/dpr_boosted/checkpoint.pth"
+    question_encoder_config = DPRConfig.from_pretrained("facebook/dpr-question_encoder-single-nq-base")
+    context_encoder_config = DPRConfig.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base")
+
+    question_encoder = DPRQuestionEncoder.from_pretrained("facebook/dpr-question_encoder-single-nq-base", config=question_encoder_config)
+    context_encoder = DPRContextEncoder.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base", config=context_encoder_config)
+
+    combined_model = DPRCombinedModel(question_encoder, context_encoder)
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    combined_model.load_state_dict(checkpoint['model_state_dict'])
+
+    query_encoder = DPRQuestionEncoder.from_pretrained(
+        model_path)
+    query_tokenizer = AutoTokenizer.from_pretrained(
+        model_path)
+
+    doc_encoder = DPRContextEncoder.from_pretrained(
+        model_path)
+    doc_tokenizer = AutoTokenizer.from_pretrained(
+        model_path)
+
+    beir_model = BEIRDPR(query_encoder, doc_encoder,
+                         query_tokenizer, doc_tokenizer)
+    model = DRES(beir_model, batch_size=128)
+
 
 if "deepset" in model_name:
     if model_path is None:

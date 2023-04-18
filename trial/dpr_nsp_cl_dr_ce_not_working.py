@@ -1,44 +1,3 @@
-import json
-import torch
-from transformers import (
-    DPRContextEncoder, DPRContextEncoderTokenizerFast,
-    DPRQuestionEncoder, DPRQuestionEncoderTokenizerFast,
-    DPRReader, DPRReaderTokenizerFast, TrainingArguments, Trainer
-)
-from torch.utils.data import DataLoader
-import torch.nn as nn
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
-import transformers
-from torch.optim import SGD
-print(transformers.__version__)
-from transformers import T5Tokenizer
-import json
-from torch.optim.lr_scheduler import CyclicLR
-from transformers import DPRConfig, DPRContextEncoder, DPRContextEncoderTokenizer
-from transformers import DPRQuestionEncoder, DPRQuestionEncoderTokenizer
-from transformers import DPRReader, DPRReaderTokenizer
-from transformers import TrainingArguments, Trainer
-from transformers import EarlyStoppingCallback
-from tqdm.auto import tqdm
-from transformers import T5EncoderModel
-from transformers import AutoModel
-
-
-config = {
-    "epochs": 10,
-    "batch_size": 4,
-    "learning_rates": {
-        "question_encoder": 3e-5,
-        "context_encoder": 3e-5,
-        "cross_encoder": 1e-5
-    },
-    "gradient_accumulation_steps": 128,
-    "max_length": 512,
-    "patience": 3,
-    "temperature": 1.0,
-}
-
-
 
 
 class T5CrossEncoder(nn.Module):
@@ -53,8 +12,6 @@ class T5CrossEncoder(nn.Module):
         pooled_output = last_hidden_state[:, 0]
         logits = self.classifier(pooled_output)
         return logits
-
-
 
 
 class CustomDPRQuestionEncoderWithDropout(nn.Module):
@@ -87,54 +44,6 @@ class CustomDPRContextEncoder(nn.Module):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
         pooled_output = outputs.pooler_output
         return  self.linear(self.dropout(self.layer_norm(pooled_output)))
-        # return self.linear(pooled_output)
-        # return outputs.pooler_output
-
-# config = DPRConfig.from_pretrained("facebook/dpr-question_encoder-single-nq-base")
-question_encoder = CustomDPRQuestionEncoderWithDropout("facebook/dpr-question_encoder-single-nq-base", 0.1)
-question_tokenizer = DPRQuestionEncoderTokenizer.from_pretrained("facebook/dpr-question_encoder-single-nq-base")
-
-context_encoder = CustomDPRContextEncoder(model_name="facebook/dpr-ctx_encoder-single-nq-base", dropout_rate=0.1)
-context_tokenizer = DPRContextEncoderTokenizer.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base")
-
-# reader = DPRReader.from_pretrained("facebook/dpr-reader-single-nq-base")
-# reader_tokenizer = DPRReaderTokenizer.from_pretrained("facebook/dpr-reader-single-nq-base")
-
-import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"  # Set this to the index of the GPU you want to use
-import torch
-import torch.nn as nn
-from torch.optim import AdamW
-from tqdm import tqdm
-import random
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-question_encoder = nn.DataParallel(question_encoder)
-context_encoder = nn.DataParallel(context_encoder)
-question_encoder.to(device)
-context_encoder.to(device)
-t5_pretrained_model_name = "t5-base"
-t5_cross_encoder = T5CrossEncoder(t5_pretrained_model_name)
-t5_cross_encoder= nn.DataParallel(t5_cross_encoder)
-t5_cross_encoder.to(device)
-t5_tokenizer = T5Tokenizer.from_pretrained(t5_pretrained_model_name)
-
-with open("/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/data/mdd_dpr/dpr.multidoc2dial_all.structure.train.json", "r") as f:
-    training_data = json.load(f)
-
-with open("/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/data/mdd_dpr/dpr.psg.multidoc2dial_all.structure.json", "r") as f:
-    corpus_data = json.load(f)
-
-with open("/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/data/mdd_dpr/dpr.multidoc2dial_all.structure.validation.json", "r") as f:
-    validation_data = json.load(f)
-
-with open("/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/data/mdd_dpr/dpr.multidoc2dial_all.structure.test.json", "r") as f:
-    test_data = json.load(f)
-
-
-import json
-import re
-from datasets import Dataset
 
 def remove_extra_spaces(text):
     return re.sub(r'\s+', ' ', text).strip()
@@ -149,11 +58,6 @@ def preprocess_question(question):
     turns = [" || ".join(turn) for turn in turns]
 
     return "Query: "+ questions.lower()+ " || Context: "+  " ".join(turns).lower() 
-
-
-
-
-import random
 
 def preprocess_data(training_data, negative_weight=1, hard_negative_weight=2):
     train_data = {
@@ -183,125 +87,7 @@ def preprocess_data(training_data, negative_weight=1, hard_negative_weight=2):
 
     return train_data
 
-def preprocess_corpus_data(corpus_data):
-    corpus_data_preprocessed = {
-        "title": [],
-        "text": []
-    }
 
-    for item in corpus_data:
-        title = remove_extra_spaces(item["title"].lower())
-        text = remove_extra_spaces(item["text"].lower())
-        corpus_data_preprocessed["title"].append(title)
-        corpus_data_preprocessed["text"].append(text)
-    
-    return corpus_data_preprocessed
-
-# corpus_data_dict = preprocess_corpus_data(corpus_data)
-
-corpus_data_dict = preprocess_corpus_data(corpus_data)
-corpus_dataset = Dataset.from_dict(corpus_data_dict)
-
-# training_data= preprocess_data(training_data)
-# test_data= preprocess_data(test_data)
-# validation_data= preprocess_data(validation_data)
-
-# from transformers import MarianMTModel, MarianTokenizer
-
-# model_name = f'Helsinki-NLP/opus-mt-en-fr'
-# en_fr_tokenizer = MarianTokenizer.from_pretrained(model_name)
-# en_fr_model = MarianMTModel.from_pretrained(model_name).to(device)
-
-# model_name = f'Helsinki-NLP/opus-mt-fr-en'
-# fr_en_tokenizer = MarianTokenizer.from_pretrained(model_name)
-# fr_en_model = MarianMTModel.from_pretrained(model_name).to(device)
-
-# def backtranslate(texts, en_fr_model,en_fr_tokenizer,fr_en_model,fr_en_tokenizer, batch_size=32):
-#     # Load the translation model and tokenizer
-
-#     results = []
-#     dataset = Dataset.from_dict({"text": texts})
-#     dataloader = DataLoader(dataset, batch_size=batch_size)
-#     with torch.no_grad():
-#         # iters = tqdm(range(0, len(texts) - batch_size + 1, batch_size),desc="Backtranslating")
-#         for batch in tqdm(dataloader, desc="Translating"): 
-#             batch_texts = batch["text"]
-#             n = len(batch_texts)
-
-#             inputs = en_fr_tokenizer(batch_texts, return_tensors='pt', padding=True, truncation=True, max_length=512).to(device)
-#             translated = en_fr_model.generate(**inputs)
-#             target_texts = en_fr_tokenizer.batch_decode(translated, skip_special_tokens=True)
-
-
-#             inputs = fr_en_tokenizer(target_texts, return_tensors='pt', padding=True, truncation=True, max_length=512).to(device)
-#             backtranslated = fr_en_model.generate(**inputs)
-#             source_texts = fr_en_tokenizer.batch_decode(backtranslated, skip_special_tokens=True)
-
-#             results.extend(source_texts[:n])
-
-#     return results
-
-
-# Assuming `training_data` is a list of dictionaries containing "question", "positive_ctxs", "negative_ctxs", and "hard_negative_ctxs"
-preprocessed_data = preprocess_data(training_data)
-train_dataset = Dataset.from_dict(preprocessed_data)
-train_dataloader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True)
-
-preprocessed_validation_data = preprocess_data(validation_data)
-validation_dataset  = Dataset.from_dict(preprocessed_validation_data)
-validation_dataloader = DataLoader(validation_dataset, batch_size=config["batch_size"], shuffle=True)
-
-
-# Add the preprocessing function that tokenizes the context and question
-def preprocess_function(examples):
-    question_encodings = question_tokenizer(examples['question'], truncation=True, padding='max_length', max_length=256)
-    context_encodings = context_tokenizer(examples['context'], truncation=True, padding='max_length', max_length=256)
-    
-    encodings = {
-        'input_ids': question_encodings['input_ids'],
-        'attention_mask': question_encodings['attention_mask'],
-        'context_input_ids': context_encodings['input_ids'],
-        'context_attention_mask': context_encodings['attention_mask'],
-        'labels': examples['labels'],
-    }
-    
-    return encodings
-
-
-import torch
-
-from transformers import DPRQuestionEncoder, DPRContextEncoder
-from torch.nn.utils import clip_grad_norm_
-
-
-def kaiming_initialization(module):
-    if isinstance(module, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
-        nn.init.kaiming_normal_(module.weight, nonlinearity="relu")
-        if module.bias is not None:
-            nn.init.constant_(module.bias, 0)
-    elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
-        nn.init.constant_(module.weight, 1)
-        nn.init.constant_(module.bias, 0)
-
-class EarlyStopping:
-    def __init__(self, patience=3, delta=0.001):
-        self.patience = patience
-        self.delta = delta
-        self.best_loss = None
-        self.counter = 0
-
-    def __call__(self, loss):
-        if self.best_loss is None:
-            self.best_loss = loss
-        elif self.best_loss - loss > self.delta:
-            self.counter = 0
-            self.best_loss = loss
-        else:
-            self.counter += 1
-
-        if self.counter >= self.patience:
-            return True
-        return False
 def contrastive_loss(anchor_embeddings, positive_embeddings, negative_embeddings, margin=1.0):
     pos_distances = torch.norm(anchor_embeddings - positive_embeddings, dim=-1)
     neg_distances = torch.norm(anchor_embeddings - negative_embeddings, dim=-1)
@@ -318,17 +104,6 @@ class DPRCombinedModel(nn.Module):
         context_outputs = self.context_encoder(input_ids=context_input_ids, attention_mask=context_attention_mask)
         return question_outputs, context_outputs
     
-import torch
-import torch.nn.functional as F
-from torch.optim import AdamW
-from torch.utils.data import DataLoader
-from transformers import get_linear_schedule_with_warmup
-from math import ceil
-from tqdm import tqdm
-import copy
-import random
-import datetime
-import os
 
 
 def process_batch(batch, question_tokenizer, context_tokenizer, max_length, device):
@@ -470,18 +245,8 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
             cross_encoder_weight = running_cross_encoder_loss / total_running_loss
             dr_weight = running_dr_loss / total_running_loss
 
-            # Compute the combined loss using updated weights
             combined_loss = contrastive_weight * loss + cross_encoder_weight * cross_encoder_loss + dr_weight * dr_loss
             total_loss += combined_loss.item()
-
-
-
-        # Combine the losses
-            # combined_loss = (1 - alpha) * loss + alpha * cross_encoder_loss + dr_loss
-            # total_loss += combined_loss.item()
-
-            # total_loss += loss.item()
-
             combined_loss = combined_loss / gradient_accumulation_steps
             combined_loss.backward()
 
@@ -583,12 +348,7 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
             print(f"Best model checkpoint saved with validation loss: {best_val_loss} in directory {directory_to_save}")
 
             print(f"Best model saved with validation loss: {best_val_loss}")
-        # else:
-        #     num_epochs_without_improvement += 1
 
-        # if num_epochs_without_improvement >= patience:
-        #     print(f"Early stopping triggered. No improvement in validation loss for {patience} consecutive epochs.")
-        #     break
         if early_stopping(avg_val_loss):
             print("Early stopping triggered")
             break
@@ -596,66 +356,3 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
     print("Training complete.")
     return best_model
 
-
-
-# Calculate total training steps and set num_warmup_steps as a fraction of total steps
-total_steps = (len(train_dataset) // (config["batch_size"] * config["gradient_accumulation_steps"])) * config["epochs"]
-config["num_warmup_steps"] = int(0.1 * total_steps)
-
-
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-combined_model = DPRCombinedModel(question_encoder, context_encoder)
-combined_model.apply(kaiming_initialization)
-best_model = train_dpr_model(config, train_dataset, validation_dataset, combined_model, t5_cross_encoder,question_tokenizer, context_tokenizer, t5_tokenizer, device)
-
-
-# import torch
-# from transformers import DPRQuestionEncoder, DPRContextEncoder, DPRConfig
-# from dpr_model import DPRCombinedModel
-
-# def load_saved_model(checkpoint_path, device):
-#     question_encoder_config = DPRConfig.from_pretrained("facebook/dpr-question_encoder-single-nq-base")
-#     context_encoder_config = DPRConfig.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base")
-
-#     question_encoder = DPRQuestionEncoder.from_pretrained("facebook/dpr-question_encoder-single-nq-base", config=question_encoder_config)
-#     context_encoder = DPRContextEncoder.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base", config=context_encoder_config)
-
-#     combined_model = DPRCombinedModel(question_encoder, context_encoder)
-
-#     checkpoint = torch.load(checkpoint_path, map_location=device)
-#     combined_model.load_state_dict(checkpoint['model_state_dict'])
-#     combined_model.to(device)
-#     combined_model.eval()
-
-#     return combined_model
-
-# # Load the saved model
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# checkpoint_path = "your_saved_checkpoint_directory/checkpoint.pth"
-# loaded_model = load_saved_model(checkpoint_path, device)
-
-
-# import torch
-# from transformers import BertModel, T5ForConditionalGeneration
-
-# # Initialize models
-# question_encoder = BertModel.from_pretrained("bert-base-uncased")
-# context_encoder = BertModel.from_pretrained("bert-base-uncased")
-# cross_encoder = T5ForConditionalGeneration.from_pretrained("t5-base")
-
-# # Load checkpoint
-# checkpoint_path = "path/to/checkpoint.pth"
-# checkpoint = torch.load(checkpoint_path)
-
-# # Load state_dicts
-# question_encoder.load_state_dict(checkpoint["question_encoder_state_dict"])
-# context_encoder.load_state_dict(checkpoint["context_encoder_state_dict"])
-# cross_encoder.load_state_dict(checkpoint["cross_encoder_state_dict"])
-
-# # Set models to eval mode
-# question_encoder.eval()
-# context_encoder.eval()
-# cross_encoder.eval()
