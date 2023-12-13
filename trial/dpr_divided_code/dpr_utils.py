@@ -370,6 +370,17 @@ def process_batch(batch, question_tokenizer, context_tokenizer, max_length, devi
 
     return anchor_input_ids, anchor_attention_mask, positive_input_ids, positive_attention_mask, negative_input_ids, negative_attention_mask
 
+def truncate_question_sequences(question, max_question_len=255):
+    question_tokens = t5_tokenizer(question, truncation=True, max_length=max_question_len, return_tensors="pt")
+    print(len(question_tokens["input_ids"].squeeze()))
+    decoded_text = t5_tokenizer.decode(question_tokens["input_ids"].squeeze(), skip_special_tokens=True)
+    return decoded_text
+
+
+def process_question_list(questions, max_question_len=255):
+    truncated_questions = [truncate_question_sequences(q, max_question_len) for q in questions]
+    return truncated_questions
+
 
 def train_dpr_model(config, train_dataset, validation_dataset, model, cross_encoder, question_tokenizer, context_tokenizer, t5_tokenizer, device):
     epochs = config["epochs"]
@@ -471,8 +482,15 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
             margin = 0.1  # Adjust the margin value as needed based on the problem and dataset
             dr_loss = torch.clamp(margin - positive_scores + negative_scores, min=0).mean()
             # Prepare cross-encoder inputs
-            positive_t5_input = [f"{q} <sep> {c}" for q, c in zip(questions, positive_contexts)]
-            negative_t5_input = [f"{q} <sep> {c}" for q, c in zip(questions, negative_contexts)]
+            
+            t5_questions = process_question_list(questions, model_max_length//2 -56)
+            # print ("what to take:", model_max_length//2 -56)
+            # print (len(t5_questions[0].split()))
+            # print (len(questions[0].split()))
+            # print (t5_questions[0])
+            # print (questions[0])
+            positive_t5_input = [f"{q} </s> {c}" for q, c in zip(t5_questions, positive_contexts)]
+            negative_t5_input = [f"{q} </s> {c}" for q, c in zip(t5_questions, negative_contexts)]
             t5_input = positive_t5_input + negative_t5_input
 
             t5_encodings = t5_tokenizer(t5_input, return_tensors="pt", padding='max_length', truncation=True, max_length=max_length)
@@ -557,8 +575,9 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
                 loss = contrastive_loss(anchor_embeddings, positive_embeddings, negative_embeddings)
 
             # Prepare cross-encoder inputs
-            positive_t5_input = [f"{q} <sep> {c}" for q, c in zip(questions, positive_contexts)]
-            negative_t5_input = [f"{q} <sep> {c}" for q, c in zip(questions, negative_contexts)]
+            t5_questions = process_question_list(questions, model_max_length//2 -56)
+            positive_t5_input = [f"{q} </s> {c}" for q, c in zip(t5_questions, positive_contexts)]
+            negative_t5_input = [f"{q} </s> {c}" for q, c in zip(t5_questions, negative_contexts)]
             t5_input = positive_t5_input + negative_t5_input
 
             t5_encodings = t5_tokenizer(t5_input, return_tensors="pt", padding='max_length', truncation=True, max_length=max_length)
@@ -587,7 +606,7 @@ def train_dpr_model(config, train_dataset, validation_dataset, model, cross_enco
             best_cross_encoder_state_dict = copy.deepcopy(cross_encoder.state_dict())
             # Get the current date and time as a string
             timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-            directory_to_save="/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/trial/output/contrastive_discriminative_pre_trained_2/"+timestamp
+            directory_to_save="/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/trial/output/contrastive_discriminative_pre_trained_truncated_t5/"+timestamp
             # Create a new directory with the timestamp
             os.makedirs(directory_to_save, exist_ok=True)
 

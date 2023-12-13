@@ -25,7 +25,7 @@ print(transformers.__version__)
 from transformers import T5Tokenizer
 import json
 from torch.optim.lr_scheduler import CyclicLR
-from transformers import DPRConfig, DPRContextEncoder, DPRContextEncoderTokenizer, AutoTokenizer
+from transformers import DPRConfig, DPRContextEncoder, DPRContextEncoderTokenizer
 from transformers import DPRQuestionEncoder, DPRQuestionEncoderTokenizer
 from transformers import DPRReader, DPRReaderTokenizer
 from transformers import TrainingArguments, Trainer
@@ -33,17 +33,61 @@ from transformers import EarlyStoppingCallback
 from tqdm.auto import tqdm
 from transformers import T5EncoderModel
 from transformers import AutoModel
+from transformers import T5Config
+from torch.nn.functional import cosine_similarity
 
 
 
-question_tokenizer = AutoTokenizer.from_pretrained(
-    "sivasankalpp/dpr-multidoc2dial-structure-question-encoder")
-context_tokenizer = AutoTokenizer.from_pretrained(
-    "sivasankalpp/dpr-multidoc2dial-structure-ctx-encoder")
+
+class CustomDPRContextEncoder(nn.Module):
+    def __init__(self, model_name, dropout_rate):
+        super(CustomDPRContextEncoder, self).__init__()
+        self.model = DPRContextEncoder.from_pretrained(model_name)
+        self.dropout = nn.Dropout(dropout_rate)
+        self.layer_norm = nn.LayerNorm(self.model.config.hidden_size)
+        self.linear = self._init_linear(self.model.config.hidden_size)
+
+    def _init_linear(self, hidden_size):
+        linear = nn.Linear(hidden_size, hidden_size)
+        return linear
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        pooled_output = outputs.pooler_output
+        return pooled_output
+
+
+
+
+class CustomDPRQuestionEncoderWithDropout(nn.Module):
+    def __init__(self, model_name, dropout_rate):
+        super(CustomDPRQuestionEncoderWithDropout, self).__init__()
+        self.model = DPRQuestionEncoder.from_pretrained(model_name)
+        self.dropout = nn.Dropout(dropout_rate)
+        self.layer_norm = nn.LayerNorm(self.model.config.hidden_size)
+        self.linear = self._init_linear(self.model.config.hidden_size)
+
+    def _init_linear(self, hidden_size):
+        linear = nn.Linear(hidden_size, hidden_size)
+        return linear
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        pooled_output = outputs.pooler_output
+        return pooled_output
+
+
+
+
+
+question_tokenizer = DPRQuestionEncoderTokenizer.from_pretrained("sivasankalpp/dpr-multidoc2dial-structure-question-encoder")
+
+
+context_tokenizer = DPRContextEncoderTokenizer.from_pretrained("sivasankalpp/dpr-multidoc2dial-structure-ctx-encoder")
 
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1,0"  # Set this to the index of the GPU you want to use
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,3,1,2"  # Set this to the index of the GPU you want to use
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
@@ -51,6 +95,8 @@ from tqdm import tqdm
 import random
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# question_encoder = nn.DataParallel(question_encoder)
+
 
 with open("/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/data/mdd_dpr/dpr.multidoc2dial_all.structure.train.json", "r") as f:
     training_data = json.load(f)
@@ -65,6 +111,7 @@ with open("/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/data/mdd_dp
     test_data = json.load(f)
 
 
+
 import json
 import re
 from datasets import Dataset
@@ -72,29 +119,14 @@ from datasets import Dataset
 def remove_extra_spaces(text):
     return re.sub(r'\s+', ' ', text).strip()
 
+
 def preprocess_question(question):
-    return question
-
-
+    return remove_extra_spaces(question)
 
 
 import random
 
 
-
-def preprocess_corpus_data(corpus_data):
-    corpus_data_preprocessed = {
-        "title": [],
-        "text": []
-    }
-
-    for item in corpus_data:
-        title = remove_extra_spaces(item["title"].lower())
-        text = remove_extra_spaces(item["text"].lower())
-        corpus_data_preprocessed["title"].append(title)
-        corpus_data_preprocessed["text"].append(text)
-    
-    return corpus_data_preprocessed
 
 # corpus_data_dict = preprocess_corpus_data(corpus_data)
 
@@ -116,6 +148,16 @@ def preprocess_corpus_data(corpus_data):
 # Add the preprocessing function that tokenizes the context and questio
 
 
+class DPRCombinedModel(nn.Module):
+    def __init__(self, question_encoder: CustomDPRQuestionEncoderWithDropout, context_encoder: CustomDPRContextEncoder):
+        super(DPRCombinedModel, self).__init__()
+        self.question_encoder = question_encoder
+        self.context_encoder = context_encoder
+
+    def forward(self, question_input_ids, question_attention_mask, context_input_ids, context_attention_mask):
+        question_outputs = self.question_encoder(input_ids=question_input_ids, attention_mask=question_attention_mask)
+        context_outputs = self.context_encoder(input_ids=context_input_ids, attention_mask=context_attention_mask)
+        return question_outputs, context_outputs
     
 import torch
 import torch.nn.functional as F
@@ -128,26 +170,32 @@ import os
 
 
 
-def load_saved_model():
-    question_encoder = DPRQuestionEncoder.from_pretrained(
-        "sivasankalpp/dpr-multidoc2dial-structure-question-encoder")
+# checkpoint_path_dpr = "/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/trial/dpr_divided_code/output/models/93_val_error/2023-05-07_06-38-45/dpr_checkpoint.pth"
+# checkpoint_path_dpr = "/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/trial/dpr_divided_code/output/models/66_test/dpr_checkpoint.pth"
+checkpoint_path_dpr = "/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/trial/dpr_divided_code/output/models/new_96_ba/dpr_checkpoint.pth"
+def load_saved_model(checkpoint_path_dpr):
+    question_encoder = CustomDPRQuestionEncoderWithDropout("sivasankalpp/dpr-multidoc2dial-structure-question-encoder", 0.0)
+    context_encoder = CustomDPRContextEncoder(model_name="sivasankalpp/dpr-multidoc2dial-structure-ctx-encoder", dropout_rate=0.0)
 
-
-    context_encoder = DPRContextEncoder.from_pretrained(
-        "sivasankalpp/dpr-multidoc2dial-structure-ctx-encoder")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     question_encoder = nn.DataParallel(question_encoder)
     context_encoder = nn.DataParallel(context_encoder)
 
     question_encoder.to(device)
-    context_encoder.to(device)
     question_encoder.eval()
+    context_encoder.to(device)
     context_encoder.eval()
-    return question_encoder, context_encoder
+    combined_model = DPRCombinedModel(question_encoder, context_encoder)
 
-question_encoder, context_encoder = load_saved_model()
+    checkpoint_dpr = torch.load(checkpoint_path_dpr, map_location=device)
+    print ("Loss: ", checkpoint_dpr["loss"])
+    combined_model.load_state_dict(checkpoint_dpr['model_state_dict'],  strict=False)
+    combined_model.to(device)
+    combined_model.eval()
+    return combined_model
 
 
+combined_model= load_saved_model(checkpoint_path_dpr)
 import torch
 import torch.nn as nn
 
@@ -165,10 +213,10 @@ def cosine_similarity_torch(embedding1, embedding2):
     return similarity_scores
 
 
-def evaluate(question_encoder, context_encoder, question_tokenizer, context_tokenizer, data_loader, device):
+def evaluate(model, question_tokenizer, context_tokenizer, data_loader, device):
     # model.eval()
-    question_encoder.eval()
-    context_encoder.eval()
+    model.eval()
+
     f1_scores = []
     mrr_scores = []
     r_at_1 = []
@@ -176,14 +224,15 @@ def evaluate(question_encoder, context_encoder, question_tokenizer, context_toke
     r_at_10 = []
     em_scores = []
     max_length = 512
-    ik = 0
     print(len(data_loader))
+    ik=0
     for idx,item in enumerate(tqdm(data_loader)):
         with torch.no_grad():
-                
+
 
                 negative_contexts= []
                 question = preprocess_question(item["question"])
+
                 positive_ctxs = item["positive_ctxs"]
                 negative_ctxs = item["negative_ctxs"]
                 hard_negative_ctxs = item["hard_negative_ctxs"]
@@ -213,12 +262,12 @@ def evaluate(question_encoder, context_encoder, question_tokenizer, context_toke
 
 
                 # Compute embeddings
-                anchor_embeddings = question_encoder(anchor_input_ids, anchor_attention_mask).pooler_output
-                positive_embeddings = context_encoder(positive_input_ids, positive_attention_mask).pooler_output
+                anchor_embeddings = model.question_encoder(anchor_input_ids, anchor_attention_mask)
+                positive_embeddings = model.context_encoder(positive_input_ids, positive_attention_mask)
 
                 negative_input_ids = negative_encodings["input_ids"].to(device)
                 negative_attention_masks= negative_encodings["attention_mask"].to(device)
-                negative_embeddings = context_encoder(negative_input_ids, negative_attention_masks).pooler_output
+                negative_embeddings = model.context_encoder(negative_input_ids, negative_attention_masks)
                 # for i in range(len(negative_input_ids)):
                 #     print(i)
                 #     negative_embeddings.append())
@@ -246,20 +295,14 @@ def evaluate(question_encoder, context_encoder, question_tokenizer, context_toke
                 ranked_indices = np.argsort(similarity_scores)[::-1]
                 # print(ranked_indices)
                 # Select the top k embeddings based on their ranked indices
-                top_k_embeddings = [positive_embeddings if i == 0 else negative_embeddings[i-1] for i in ranked_indices[:10]]
-                all_embeddings = [positive_embeddings if i == 0 else negative_embeddings[i-1] for i in ranked_indices]
+                top_k_embeddings = [positive_embeddings if i == 0 else negative_embeddings[i-1] for i in ranked_indices]
                 top_k_passages = [embedding_to_passage[str(embedding)] for embedding in top_k_embeddings]
-                all_passages = [embedding_to_passage[str(embedding)] for embedding in all_embeddings]
-                
                 # ranks = rankdata(similarity_scores, method="max")
                 # positive_ctx_rank = ranks[0]
                 # print("\n\n")
                 # print(len(similarity_scores), positive_ctx_rank, ranks, ranked_indices)
                 # print("\n\n")
 
-
-                # Re-rank the top-k passages using the cross-encoder
-                # print (reranked_indices)
 
                 new_positive_ctx_rank = -1
                 for i, passage in enumerate(top_k_passages):
@@ -271,15 +314,9 @@ def evaluate(question_encoder, context_encoder, question_tokenizer, context_toke
                         new_positive_ctx_rank = i 
                         # print("new_positive_ctx_rank", new_positive_ctx_rank)
                         break
-                if new_positive_ctx_rank == -1:
-                    ik=ik+1
-                    print(ik)
-                    for i, passage in enumerate(all_passages):
-                        if passage == positive_context:
-                            new_positive_ctx_rank = i 
-                            # print("new_positive_ctx_rank", new_positive_ctx_rank)
-                            break
-                binary_true = [1] + [0]  * (len(all_passages) - 1)
+                
+
+                binary_true = [1] + [0]  * (len(top_k_passages) - 1)
                 binary_pred = [1 if rank == new_positive_ctx_rank else 0 for rank in range(len(binary_true))]
                 f1_scores.append(f1_score(binary_true, binary_pred))
                 
@@ -322,15 +359,9 @@ def evaluate(question_encoder, context_encoder, question_tokenizer, context_toke
 
 
 
-
-with open("/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/data/mdd_dpr/dpr.multidoc2dial_all.structure.test.json", "r") as f:
-    test_data = json.load(f)
-
-
-
 test_data= test_data
 
-evaluation_results = evaluate(question_encoder, context_encoder, question_tokenizer, context_tokenizer, test_data, device)
+evaluation_results = evaluate(combined_model, question_tokenizer, context_tokenizer, test_data, device)
 
 print("Evaluation results:")
 for metric, value in evaluation_results.items():

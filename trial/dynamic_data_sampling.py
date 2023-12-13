@@ -94,3 +94,8 @@ def train_dynamic(model, dataset, device, epochs, uncertainty_threshold):
         
         val_accuracy = evaluate(model, val_subset, device)
         print(f"Epoch: {epoch + 1}, Validation accuracy: {val_accuracy:.4f}")
+
+
+This code snippet provides a general structure for how to train your model using dynamic data sampling with uncertainty sampling. You will need to adapt it to your specific task and dataset, as well as your DPR models.
+
+Remember that this is just one approach for dynamic data sampling, and other active learning techniques might be more suitable for your specific problem. Always experiment and iterate to find the best combination of techniques for your task.

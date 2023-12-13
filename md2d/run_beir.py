@@ -12,7 +12,7 @@ from transformers import AutoTokenizer, DPRQuestionEncoder, DPRContextEncoder, T
 
 from transformers import DPRConfig, DPRContextEncoder, DPRContextEncoderTokenizer
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # Set this to the index of the GPU you want to use
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"  # Set this to the index of the GPU you want to use
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
@@ -20,8 +20,33 @@ from tqdm import tqdm
 import random
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 import argparse
-
+from transformers import (
+    DPRContextEncoder, DPRContextEncoderTokenizer,
+    DPRQuestionEncoder, DPRQuestionEncoderTokenizer,
+    DPRReader, DPRReaderTokenizerFast, TrainingArguments, Trainer
+)
 import pdb
+
+class CustomDPRContextEncoder(nn.Module):
+    def __init__(self, model_name):
+        super(CustomDPRContextEncoder, self).__init__()
+        self.model = DPRContextEncoder.from_pretrained(model_name)
+
+    def forward(self, input_ids, attention_mask, token_type_ids=None):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        return outputs
+
+
+
+
+class CustomDPRQuestionEncoderWithDropout(nn.Module):
+    def __init__(self, model_name):
+        super(CustomDPRQuestionEncoderWithDropout, self).__init__()
+        self.model = DPRQuestionEncoder.from_pretrained(model_name)
+    def forward(self, input_ids, attention_mask, token_type_ids=None):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        return outputs
+
 
 BERT_MODEL = "mrm8488/t5-base-finetuned-break_data-question-retrieval"
 # BERT_VOCAB = "bert_model/scibert_scivocab_uncased/vocab.txt"
@@ -161,30 +186,33 @@ if "dpr-ft" in model_name:
     model = DRES(beir_model, batch_size=128)
 
 if "dpr-ft-now" in model_name:
-    checkpoint_path = "/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/trial/output/dpr_boosted/checkpoint.pth"
-    question_encoder_config = DPRConfig.from_pretrained("facebook/dpr-question_encoder-single-nq-base")
-    context_encoder_config = DPRConfig.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base")
+    checkpoint_path_dpr = "/home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/trial/dpr_divided_code/output/models/66_test/dpr_checkpoint.pth"
+    question_encoder = CustomDPRQuestionEncoderWithDropout("sivasankalpp/dpr-multidoc2dial-structure-question-encoder")
+    context_encoder = CustomDPRContextEncoder(model_name="sivasankalpp/dpr-multidoc2dial-structure-ctx-encoder")
 
-    question_encoder = DPRQuestionEncoder.from_pretrained("facebook/dpr-question_encoder-single-nq-base", config=question_encoder_config)
-    context_encoder = DPRContextEncoder.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base", config=context_encoder_config)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    question_encoder = nn.DataParallel(question_encoder)
+    context_encoder = nn.DataParallel(context_encoder)
+    question_tokenizer = DPRQuestionEncoderTokenizer.from_pretrained("sivasankalpp/dpr-multidoc2dial-structure-question-encoder")
 
+
+    context_tokenizer = DPRContextEncoderTokenizer.from_pretrained("sivasankalpp/dpr-multidoc2dial-structure-ctx-encoder")
+
+
+    question_encoder.to(device)
+    question_encoder.eval()
+    context_encoder.to(device)
+    context_encoder.eval()
     combined_model = DPRCombinedModel(question_encoder, context_encoder)
 
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    combined_model.load_state_dict(checkpoint['model_state_dict'])
 
-    query_encoder = DPRQuestionEncoder.from_pretrained(
-        model_path)
-    query_tokenizer = AutoTokenizer.from_pretrained(
-        model_path)
+    checkpoint_dpr = torch.load(checkpoint_path_dpr, map_location=device)
+    combined_model.load_state_dict(checkpoint_dpr['model_state_dict'], strict=False)
+    combined_model.to(device)
+    combined_model.eval()
 
-    doc_encoder = DPRContextEncoder.from_pretrained(
-        model_path)
-    doc_tokenizer = AutoTokenizer.from_pretrained(
-        model_path)
-
-    beir_model = BEIRDPR(query_encoder, doc_encoder,
-                         query_tokenizer, doc_tokenizer)
+    beir_model = BEIRDPR(combined_model.question_encoder, combined_model.context_encoder,
+                         question_tokenizer, context_tokenizer)
     model = DRES(beir_model, batch_size=128)
 
 

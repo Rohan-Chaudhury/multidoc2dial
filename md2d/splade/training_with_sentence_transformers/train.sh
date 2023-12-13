@@ -37,7 +37,6 @@ python splade_md2d.py \
     --model_name /home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/splade/splade_max_CoCodenser \
     --use_all_queries \
     --data_path /home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/data/mdd_dpr/beir_format \
-    --lr 1e-6 \
     --epochs 30 \
     --use_all_queries \
     --pair_lambda 0.1

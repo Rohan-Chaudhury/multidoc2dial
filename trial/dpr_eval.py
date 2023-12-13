@@ -9,7 +9,7 @@ def load_checkpoint(checkpoint_path, model, cross_encoder):
     model.load_state_dict(checkpoint["model_state_dict"])
     cross_encoder.load_state_dict(checkpoint["cross_encoder_state_dict"])
     print(f"Loaded model checkpoint with validation loss: {checkpoint['loss']}")
-
+# /home/grads/r/rohan.chaudhury/multidoc2dial/multidoc2dial/trial/output/contrastive_discriminative/2023-04-13_05-38-06
 def evaluate_model(test_dataset, model, cross_encoder, question_tokenizer, context_tokenizer, t5_tokenizer, device):
     test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=True)
 
